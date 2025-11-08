@@ -28,9 +28,22 @@ jobs:
           key_file=~/.oci/key.pem
           EOF
           
+      - name: Verify OCI config
+        run: |
+          echo "Testing OCI CLI connection..."
+          $HOME/bin/oci iam region list --config-file ~/.oci/config || echo "Warning: Could not list regions"
+          
       - name: Create Instance
+        id: create_instance
         continue-on-error: true
         run: |
+          echo "🔍 Attempting to create A1.Flex instance..."
+          echo "Region: ${{ secrets.OCI_CLI_REGION }}"
+          echo "AD: QYsH:eu-amsterdam-1-AD-1"
+          
+          # Stwórz plik z SSH key (bezpieczniejsze niż inline)
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" > /tmp/ssh_key.pub
+          
           $HOME/bin/oci compute instance launch \
             --availability-domain "QYsH:eu-amsterdam-1-AD-1" \
             --compartment-id "${{ secrets.OCI_CLI_TENANCY }}" \
@@ -40,20 +53,67 @@ jobs:
             --image-id "ocid1.image.oc1.eu-amsterdam-1.aaaaaaaath3zl3n57p4vljehpp4w63f7pqkka6j7xt5p7ppolza4mss2dvba" \
             --subnet-id "${{ secrets.SUBNET_ID }}" \
             --assign-public-ip true \
-            --metadata "{\"ssh_authorized_keys\":\"${{ secrets.SSH_PUBLIC_KEY }}\"}" \
+            --ssh-authorized-keys-file /tmp/ssh_key.pub \
             --wait-for-state RUNNING \
+            --max-wait-seconds 300 \
             2>&1 | tee output.log
-            
-          if grep -q "out of.*capacity" output.log; then
-            echo "⏳ No capacity - will retry in 15 min"
-          elif grep -q "RUNNING" output.log; then
-            echo "✅ Instance created!"
-          else
-            echo "❌ Error - check logs"
+          
+          EXIT_CODE=$?
+          
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Exit code: $EXIT_CODE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Sprawdź capacity
+          if grep -Eiq "out of (host )?capacity|InsufficientCapacity" output.log; then
+            echo "⏳ No capacity available - will retry in 15 min"
+            echo "instance_created=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
+          
+          # Sprawdź inne błędy
+          if grep -iq "ServiceError" output.log; then
+            echo "❌ ServiceError detected:"
+            grep -A 10 "ServiceError" output.log || true
+            echo "instance_created=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if grep -iq "InvalidParameter" output.log; then
+            echo "❌ InvalidParameter - check your configuration:"
+            grep -B 2 -A 5 "InvalidParameter" output.log || true
+            echo "instance_created=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if grep -iq "NotAuthorizedOrNotFound" output.log; then
+            echo "❌ NotAuthorized - check your OCIDs (compartment, subnet, image):"
+            grep -B 2 -A 5 "NotAuthorized" output.log || true
+            echo "instance_created=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Sprawdź sukces
+          if [ $EXIT_CODE -eq 0 ] && grep -q '"lifecycle-state": "RUNNING"' output.log; then
+            echo "✅ SUCCESS! Instance created and running!"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            grep -E '"display-name"|"lifecycle-state"|"public-ip"|"id"' output.log | head -20 || true
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "instance_created=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Wszystko inne
+          echo "⚠️ Unexpected result - full output:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          cat output.log
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "instance_created=false" >> $GITHUB_OUTPUT
+          exit 0
       
       - name: Send email notification on success
-        if: success()
+        if: steps.create_instance.outputs.instance_created == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -65,22 +125,10 @@ jobs:
           to: ${{ secrets.EMAIL_USERNAME }}
           from: ${{ secrets.EMAIL_USERNAME }}
           body: |
-            🎉 SUCCESS! Oracle A1.Flex instance has been created!
+            🎉 SUCCESS! Oracle A1.Flex instance created in Amsterdam!
             
-            Instance Details:
-            - Name: auto-a1-amsterdam
-            - Shape: VM.Standard.A1.Flex
-            - OCPU: 4
-            - Memory: 24 GB
-            - Region: Amsterdam (eu-amsterdam-1)
+            Go to: https://cloud.oracle.com
+            Navigate to: Compute → Instances
+            Find: auto-a1-amsterdam
             
-            Next steps:
-            1. Go to Oracle Cloud Console: https://cloud.oracle.com
-            2. Navigate to: Compute → Instances
-            3. Find instance: auto-a1-amsterdam
-            4. Note the Public IP address
-            5. Connect via SSH
-            6. IMPORTANT: Disable GitHub Actions workflow!
-            
-            Workflow details:
-            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            DISABLE GitHub workflow immediately!
