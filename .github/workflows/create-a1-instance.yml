@@ -51,3 +51,36 @@ jobs:
           else
             echo "❌ Error - check logs"
           fi
+      
+      - name: Send email notification on success
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "✅ Oracle A1.Flex Instance Created!"
+          to: ${{ secrets.EMAIL_USERNAME }}
+          from: ${{ secrets.EMAIL_USERNAME }}
+          body: |
+            🎉 SUCCESS! Oracle A1.Flex instance has been created!
+            
+            Instance Details:
+            - Name: auto-a1-amsterdam
+            - Shape: VM.Standard.A1.Flex
+            - OCPU: 4
+            - Memory: 24 GB
+            - Region: Amsterdam (eu-amsterdam-1)
+            
+            Next steps:
+            1. Go to Oracle Cloud Console: https://cloud.oracle.com
+            2. Navigate to: Compute → Instances
+            3. Find instance: auto-a1-amsterdam
+            4. Note the Public IP address
+            5. Connect via SSH
+            6. IMPORTANT: Disable GitHub Actions workflow!
+            
+            Workflow details:
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
