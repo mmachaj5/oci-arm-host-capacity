@@ -1,0 +1,28 @@
+{
+  "availabilityDomain": "QYsH:eu-amsterdam-1-AD-1",
+  "compartmentId": "ocid1.tenancy.oc1..aaaaaaaaocc74kcgu4idenpholbpuxlcg6o7r2vjjh4iii54du6zgm6cp5ma",
+  "shape": "VM.Standard.A1.Flex",
+  "shapeConfig": {
+    "ocpus": 4,
+    "memoryInGBs": 24
+  },
+  "displayName": "github-auto-a1-amsterdam",
+  "sourceDetails": {
+    "sourceType": "image",
+    "imageId": "ocid1.image.oc1.eu-amsterdam-1.aaaaaaaath3zl3n57p4vljehpp4w63f7pqkka6j7xt5p7ppolza4mss2dvba"
+  },
+  "createVnicDetails": {
+    "subnetId": "ocid1.subnet.oc1.eu-amsterdam-1.aaaaaaaa7ycev4stzpf4xswr2idgp2flf64lgsjdakaqzcwhvfkrrzhs4klq",
+    "assignPublicIp": true,
+    "assignPrivateDnsRecord": true
+  },
+  "metadata": {
+    "ssh_authorized_keys": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCa8dANLnqR+G7Fs1CN9gvLrBRMPhm0+NdPL9J5o8JynGPVENN99fVjLnHdSwPft66nO2cNziQokyr1zJwFayN6O0dRteDTl5Dq5L4HIExhTBMuiYRffnaT8rr7a1MMseOTZNi605xK0OGbM5Z6AEYY6fy+sjZGyh0jVRwwc9UHfH2Qpu64w7oBAOw2oDY8e1gaQSmXJKxQPtSKO4h6QCGqRRAbNf47ML3A50cS8ipZDWFv5P7u51dwGZavIq6v8Ib5nBq5s8IitHHopnqlPaF0Taz3H4TI25b3SXB+g+YLbH0kR5ReEP/+XcAvZYbE7/zPaS4j8S3+PjI13AnmAsdj"
+  },
+  "agentConfig": {
+    "isMonitoringDisabled": false,
+    "isManagementDisabled": false
+  },
+  "definedTags": {},
+  "freeformTags": {}
+}
