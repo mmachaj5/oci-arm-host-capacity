@@ -1,0 +1,86 @@
+name: Create A1 Amsterdam
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install OCI CLI
+        run: |
+          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh | bash -s -- --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+          
+      - name: Configure OCI
+        run: |
+          mkdir -p ~/.oci
+          echo "${{ secrets.OCI_CLI_KEY_CONTENT }}" > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
+          cat > ~/.oci/config << EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_CLI_USER }}
+          fingerprint=${{ secrets.OCI_CLI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_CLI_TENANCY }}
+          region=${{ secrets.OCI_CLI_REGION }}
+          key_file=~/.oci/key.pem
+          EOF
+          
+      - name: Create Instance
+        continue-on-error: true
+        run: |
+          $HOME/bin/oci compute instance launch \
+            --availability-domain "QYsH:eu-amsterdam-1-AD-1" \
+            --compartment-id "${{ secrets.OCI_CLI_TENANCY }}" \
+            --shape "VM.Standard.A1.Flex" \
+            --shape-config '{"ocpus":4,"memoryInGBs":24}' \
+            --display-name "auto-a1-amsterdam" \
+            --image-id "ocid1.image.oc1.eu-amsterdam-1.aaaaaaaath3zl3n57p4vljehpp4w63f7pqkka6j7xt5p7ppolza4mss2dvba" \
+            --subnet-id "${{ secrets.SUBNET_ID }}" \
+            --assign-public-ip true \
+            --metadata "{\"ssh_authorized_keys\":\"${{ secrets.SSH_PUBLIC_KEY }}\"}" \
+            --wait-for-state RUNNING \
+            2>&1 | tee output.log
+            
+          if grep -q "out of.*capacity" output.log; then
+            echo "⏳ No capacity - will retry in 15 min"
+          elif grep -q "RUNNING" output.log; then
+            echo "✅ Instance created!"
+          else
+            echo "❌ Error - check logs"
+          fi
+      
+      - name: Send email notification on success
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "✅ Oracle A1.Flex Instance Created!"
+          to: ${{ secrets.EMAIL_USERNAME }}
+          from: ${{ secrets.EMAIL_USERNAME }}
+          body: |
+            🎉 SUCCESS! Oracle A1.Flex instance has been created!
+            
+            Instance Details:
+            - Name: auto-a1-amsterdam
+            - Shape: VM.Standard.A1.Flex
+            - OCPU: 4
+            - Memory: 24 GB
+            - Region: Amsterdam (eu-amsterdam-1)
+            
+            Next steps:
+            1. Go to Oracle Cloud Console: https://cloud.oracle.com
+            2. Navigate to: Compute → Instances
+            3. Find instance: auto-a1-amsterdam
+            4. Note the Public IP address
+            5. Connect via SSH
+            6. IMPORTANT: Disable GitHub Actions workflow!
+            
+            Workflow details:
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
