@@ -1,0 +1,85 @@
+name: Create Oracle A1.Flex Instance (Amsterdam)
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # Co 15 minut
+  workflow_dispatch:  # Pozwala ręcznie uruchomić
+
+jobs:
+  create-instance:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Install OCI CLI
+        run: |
+          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh > install.sh
+          chmod +x install.sh
+          ./install.sh --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+          
+      - name: Configure OCI CLI
+        run: |
+          mkdir -p ~/.oci
+          echo "${{ secrets.OCI_CLI_KEY_CONTENT }}" > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
+          
+          cat > ~/.oci/config << 'EOF'
+          [DEFAULT]
+          user=${{ secrets.OCI_CLI_USER }}
+          fingerprint=${{ secrets.OCI_CLI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_CLI_TENANCY }}
+          region=${{ secrets.OCI_CLI_REGION }}
+          key_file=~/.oci/key.pem
+          EOF
+          
+      - name: Verify OCI CLI configuration
+        run: |
+          $HOME/bin/oci --version
+          $HOME/bin/oci iam region list --config-file ~/.oci/config
+          
+      - name: Try to create A1.Flex instance in Amsterdam AD-1
+        id: create
+        continue-on-error: true
+        run: |
+          echo "Attempting to create instance in QYsH:eu-amsterdam-1-AD-1..."
+          
+          $HOME/bin/oci compute instance launch \
+            --availability-domain "QYsH:eu-amsterdam-1-AD-1" \
+            --compartment-id "${{ secrets.OCI_CLI_TENANCY }}" \
+            --shape "VM.Standard.A1.Flex" \
+            --shape-config '{"ocpus":4,"memoryInGBs":24}' \
+            --display-name "github-auto-a1-amsterdam" \
+            --image-id "ocid1.image.oc1.eu-amsterdam-1.aaaaaaaath3zl3n57p4vljehpp4w63f7pqkka6j7xt5p7ppolza4mss2dvba" \
+            --subnet-id "${{ secrets.SUBNET_ID }}" \
+            --assign-public-ip true \
+            --ssh-authorized-keys-file <(echo "${{ secrets.SSH_PUBLIC_KEY }}") \
+            --config-file ~/.oci/config \
+            --wait-for-state RUNNING \
+            --max-wait-seconds 600 \
+            2>&1 | tee /tmp/oci-output.txt
+          
+          if grep -q "InvalidParameter\|NotAuthorized\|LimitExceeded" /tmp/oci-output.txt; then
+            echo "❌ Configuration error - check your settings!"
+            exit 1
+          fi
+          
+          if grep -q "Out of host capacity\|InternalError" /tmp/oci-output.txt; then
+            echo "⏳ No capacity available - will retry in 15 minutes"
+            exit 0
+          fi
+          
+          if grep -q "RUNNING" /tmp/oci-output.txt; then
+            echo "✅ Instance created successfully!"
+            exit 0
+          fi
+          
+      - name: Report status
+        if: always()
+        run: |
+          if [ -f /tmp/oci-output.txt ]; then
+            echo "=== Full output ==="
+            cat /tmp/oci-output.txt
+          fi
