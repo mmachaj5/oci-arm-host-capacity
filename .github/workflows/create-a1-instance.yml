@@ -46,11 +46,11 @@ jobs:
           
           $HOME/bin/oci compute instance launch \
             --availability-domain "QYsH:eu-amsterdam-1-AD-1" \
-            --compartment-id "${{ secrets.OCI_CLI_TENANCY }}" \
+            --compartment-id "${{ secrets.COMPARTMENT_ID }}" \
             --shape "VM.Standard.A1.Flex" \
             --shape-config '{"ocpus":4,"memoryInGBs":24}' \
             --display-name "auto-a1-amsterdam" \
-            --image-id "ocid1.image.oc1.eu-amsterdam-1.aaaaaaaaqgcxnnswli5zezdbr34rnrziqapp2ofggaztnl3ynwey4vbwygnq" \
+            --image-id "ocid1.image.oc1.eu-amsterdam-1.aaaaaaaaioyodv57qb3wzjo2a26s2u225dkgoaav6itnhpieschantk34gkq" \
             --subnet-id "${{ secrets.SUBNET_ID }}" \
             --assign-public-ip true \
             --ssh-authorized-keys-file /tmp/ssh_key.pub \
