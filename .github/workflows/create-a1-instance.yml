@@ -1,134 +1,191 @@
-name: Create A1 Amsterdam
+name: OCI Automation
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
-  workflow_dispatch:
+    - cron: '*/15 * * * *'  # Co 15 minut
+  workflow_dispatch:        # Możliwość ręcznego uruchomienia
+  push:
+    branches:
+      - main                # Uruchom przy push do main (opcjonalnie)
 
 jobs:
-  create:
+  oci-task:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
     steps:
+      # 1. Checkout repozytorium (jeśli potrzebujesz plików z repo)
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      # 2. Konfiguracja Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      # 3. Cache dla OCI CLI (przyspiesza kolejne uruchomienia)
+      - name: Cache OCI CLI
+        id: cache-oci
+        uses: actions/cache@v3
+        with:
+          path: ~/.local
+          key: ${{ runner.os }}-oci-cli-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-oci-cli-
+      
+      # 4. Instalacja OCI CLI
       - name: Install OCI CLI
         run: |
-          curl -L https://raw.githubusercontent.com/oracle/oci-cli/main/scripts/install/install.sh | bash -s -- --accept-all-defaults
-          echo "$HOME/bin" >> $GITHUB_PATH
-          
-      - name: Configure OCI
+          echo "📦 Instalacja OCI CLI..."
+          pip install --user oci-cli
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      
+      # 5. Weryfikacja instalacji
+      - name: Verify OCI CLI Installation
         run: |
+          sleep 1
+          export PATH="$HOME/.local/bin:$PATH"
+          
+          if command -v oci &> /dev/null; then
+            echo "✅ OCI CLI zainstalowane pomyślnie"
+            echo "Wersja: $(oci --version)"
+          else
+            echo "❌ OCI CLI nie znalezione"
+            exit 1
+          fi
+      
+      # 6. Konfiguracja OCI CLI
+      - name: Configure OCI CLI
+        env:
+          OCI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
+          OCI_KEY: ${{ secrets.OCI_CLI_KEY }}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          
+          echo "🔧 Konfiguracja OCI CLI..."
+          
+          # Sprawdź czy secrets są ustawione
+          if [ -z "$OCI_CONFIG" ] || [ -z "$OCI_KEY" ]; then
+            echo "❌ Brak wymaganych secrets (OCI_CLI_CONFIG lub OCI_CLI_KEY)"
+            exit 1
+          fi
+          
+          # Utwórz katalog konfiguracyjny
           mkdir -p ~/.oci
-          echo "${{ secrets.OCI_CLI_KEY_CONTENT }}" > ~/.oci/key.pem
+          
+          # Zapisz plik konfiguracyjny
+          echo "$OCI_CONFIG" > ~/.oci/config
+          
+          # Zapisz klucz prywatny
+          echo "$OCI_KEY" > ~/.oci/key.pem
+          
+          # Ustaw odpowiednie uprawnienia
           chmod 600 ~/.oci/key.pem
-          cat > ~/.oci/config << EOF
-          [DEFAULT]
-          user=${{ secrets.OCI_CLI_USER }}
-          fingerprint=${{ secrets.OCI_CLI_FINGERPRINT }}
-          tenancy=${{ secrets.OCI_CLI_TENANCY }}
-          region=${{ secrets.OCI_CLI_REGION }}
-          key_file=~/.oci/key.pem
-          EOF
+          chmod 600 ~/.oci/config
           
-      - name: Verify OCI config
+          echo "✅ OCI CLI skonfigurowane"
+      
+      # 7. Test połączenia z OCI
+      - name: Test OCI Connection
         run: |
-          echo "Testing OCI CLI connection..."
-          $HOME/bin/oci iam region list --config-file ~/.oci/config || echo "Warning: Could not list regions"
+          export PATH="$HOME/.local/bin:$PATH"
           
-      - name: Create Instance
-        id: create_instance
-        continue-on-error: true
+          echo "🔍 Testowanie połączenia z OCI..."
+          
+          if oci os ns get; then
+            echo "✅ Połączenie z OCI działa poprawnie"
+          else
+            echo "❌ Nie można połączyć się z OCI"
+            exit 1
+          fi
+      
+      # 8. Główne zadania OCI
+      - name: Run OCI Commands
+        env:
+          COMPARTMENT_ID: ${{ secrets.COMPARTMENT_ID }}
         run: |
-          echo "🔍 Attempting to create A1.Flex instance..."
-          echo "Region: ${{ secrets.OCI_CLI_REGION }}"
-          echo "AD: QYsH:eu-amsterdam-1-AD-1"
+          export PATH="$HOME/.local/bin:$PATH"
           
-          # Stwórz plik z SSH key (bezpieczniejsze niż inline)
-          echo "${{ secrets.SSH_PUBLIC_KEY }}" > /tmp/ssh_key.pub
+          echo "🚀 Uruchamianie komend OCI..."
           
-          $HOME/bin/oci compute instance launch \
-            --availability-domain "QYsH:eu-amsterdam-1-AD-1" \
-            --compartment-id "${{ secrets.COMPARTMENT_ID }}" \
-            --shape "VM.Standard.A1.Flex" \
-            --shape-config '{"ocpus":4,"memoryInGBs":24}' \
-            --display-name "auto-a1-amsterdam" \
-            --image-id "ocid1.image.oc1.eu-amsterdam-1.aaaaaaaaioyodv57qb3wzjo2a26s2u225dkgoaav6itnhpieschantk34gkq" \
-            --subnet-id "${{ secrets.SUBNET_ID }}" \
-            --assign-public-ip true \
-            --ssh-authorized-keys-file /tmp/ssh_key.pub \
-            --wait-for-state RUNNING \
-            --max-wait-seconds 300 \
-            2>&1 | tee output.log
+          # ===================================
+          # TUTAJ DODAJ SWOJE KOMENDY OCI
+          # ===================================
           
-          EXIT_CODE=$?
+          # Przykład 1: Lista instancji compute
+          echo "📋 Lista instancji compute:"
+          oci compute instance list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --output table \
+            --query 'data[*].{Name:"display-name", State:"lifecycle-state", Shape:shape}' \
+            || echo "⚠️  Brak instancji lub błąd"
+          
+          # Przykład 2: Lista bucket'ów
+          echo ""
+          echo "📦 Lista Object Storage buckets:"
+          oci os bucket list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --output table \
+            || echo "⚠️  Brak buckets lub błąd"
+          
+          # Przykład 3: Informacje o namespace
+          echo ""
+          echo "📌 Object Storage namespace:"
+          oci os ns get
+          
+          # Przykład 4: Sprawdź limity i usage
+          echo ""
+          echo "📊 Service limits:"
+          oci limits value list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --service-name compute \
+            --all \
+            --output table \
+            || echo "⚠️  Nie można pobrać limitów"
+          
+          # Przykład 5: Eksport do JSON (jeśli potrzebujesz przetwarzać dane)
+          echo ""
+          echo "💾 Zapisywanie danych do pliku..."
+          oci compute instance list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --output json > /tmp/instances.json
+          
+          echo "Liczba instancji: $(cat /tmp/instances.json | jq '.data | length')"
           
           echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "Exit code: $EXIT_CODE"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          # Sprawdź capacity
-          if grep -Eiq "out of (host )?capacity|InsufficientCapacity" output.log; then
-            echo "⏳ No capacity available - will retry in 15 min"
-            echo "instance_created=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Sprawdź inne błędy
-          if grep -iq "ServiceError" output.log; then
-            echo "❌ ServiceError detected:"
-            grep -A 10 "ServiceError" output.log || true
-            echo "instance_created=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          if grep -iq "InvalidParameter" output.log; then
-            echo "❌ InvalidParameter - check your configuration:"
-            grep -B 2 -A 5 "InvalidParameter" output.log || true
-            echo "instance_created=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          if grep -iq "NotAuthorizedOrNotFound" output.log; then
-            echo "❌ NotAuthorized - check your OCIDs (compartment, subnet, image):"
-            grep -B 2 -A 5 "NotAuthorized" output.log || true
-            echo "instance_created=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Sprawdź sukces
-          if [ $EXIT_CODE -eq 0 ] && grep -q '"lifecycle-state": "RUNNING"' output.log; then
-            echo "✅ SUCCESS! Instance created and running!"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            grep -E '"display-name"|"lifecycle-state"|"public-ip"|"id"' output.log | head -20 || true
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "instance_created=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Wszystko inne
-          echo "⚠️ Unexpected result - full output:"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          cat output.log
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "instance_created=false" >> $GITHUB_OUTPUT
-          exit 0
+          echo "✅ Wszystkie komendy OCI wykonane"
       
-      - name: Send email notification on success
-        if: steps.create_instance.outputs.instance_created == 'true'
-        uses: dawidd6/action-send-mail@v3
+      # 9. Upload artefaktów (opcjonalnie - jeśli chcesz zachować wyniki)
+      - name: Upload Results
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "✅ Oracle A1.Flex Instance Created!"
-          to: ${{ secrets.EMAIL_USERNAME }}
-          from: ${{ secrets.EMAIL_USERNAME }}
-          body: |
-            🎉 SUCCESS! Oracle A1.Flex instance created in Amsterdam!
-            
-            Go to: https://cloud.oracle.com
-            Navigate to: Compute → Instances
-            Find: auto-a1-amsterdam
-            
-            DISABLE GitHub workflow immediately!
+          name: oci-results-${{ github.run_number }}
+          path: |
+            /tmp/*.json
+            /tmp/*.log
+          retention-days: 7
+        continue-on-error: true
+      
+      # 10. Czyszczenie (bezpieczeństwo)
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Czyszczenie..."
+          rm -rf ~/.oci
+          rm -f /tmp/*.json
+          rm -f /tmp/*.log
+          echo "✅ Cleanup zakończone"
+      
+      # 11. Podsumowanie
+      - name: Summary
+        if: always()
+        run: |
+          echo "📝 === PODSUMOWANIE ===" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Czas wykonania**: $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Runner**: ${{ runner.os }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow**: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
