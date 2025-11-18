@@ -1,211 +1,134 @@
-name: OCI ARM Capacity Check
+name: Create A1 Amsterdam
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Co 15 minut
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 jobs:
-  check-capacity:
+  create:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    
     steps:
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
-      - name: Cache OCI CLI
-        uses: actions/cache@v3
-        with:
-          path: ~/.local
-          key: ${{ runner.os }}-oci-cli-v1
-      
       - name: Install OCI CLI
         run: |
-          pip install --user oci-cli
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-      
-      - name: Verify OCI CLI Installation
+          curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh | bash -s -- --accept-all-defaults
+          echo "$HOME/bin" >> $GITHUB_PATH
+          
+      - name: Configure OCI
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          oci --version
-      
-      - name: Configure OCI CLI
-        env:
-          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-          OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          
-          # Sprawdź czy wszystkie secrets są ustawione
-          if [ -z "$OCI_CLI_USER" ]; then
-            echo "❌ Secret OCI_CLI_USER nie jest ustawiony!"
-            exit 1
-          fi
-          
-          if [ -z "$OCI_CLI_TENANCY" ]; then
-            echo "❌ Secret OCI_CLI_TENANCY nie jest ustawiony!"
-            exit 1
-          fi
-          
-          if [ -z "$OCI_CLI_FINGERPRINT" ]; then
-            echo "❌ Secret OCI_CLI_FINGERPRINT nie jest ustawiony!"
-            exit 1
-          fi
-          
-          if [ -z "$OCI_CLI_REGION" ]; then
-            echo "❌ Secret OCI_CLI_REGION nie jest ustawiony!"
-            exit 1
-          fi
-          
-          if [ -z "$OCI_CLI_KEY_CONTENT" ]; then
-            echo "❌ Secret OCI_CLI_KEY_CONTENT nie jest ustawiony!"
-            exit 1
-          fi
-          
-          echo "✅ Wszystkie wymagane secrets są ustawione"
-          
-          # Utwórz katalog konfiguracyjny
           mkdir -p ~/.oci
-          chmod 700 ~/.oci
-          
-          # Utwórz plik konfiguracyjny
+          echo "${{ secrets.OCI_CLI_KEY_CONTENT }}" > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
           cat > ~/.oci/config << EOF
           [DEFAULT]
-          user=$OCI_CLI_USER
-          fingerprint=$OCI_CLI_FINGERPRINT
-          tenancy=$OCI_CLI_TENANCY
-          region=$OCI_CLI_REGION
+          user=${{ secrets.OCI_CLI_USER }}
+          fingerprint=${{ secrets.OCI_CLI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_CLI_TENANCY }}
+          region=${{ secrets.OCI_CLI_REGION }}
           key_file=~/.oci/key.pem
           EOF
           
-          chmod 600 ~/.oci/config
-          
-          # Zapisz klucz prywatny
-          echo "$OCI_CLI_KEY_CONTENT" > ~/.oci/key.pem
-          chmod 600 ~/.oci/key.pem
-          
-          echo "✅ OCI CLI skonfigurowane"
-          echo ""
-          echo "📋 Konfiguracja (bez kluczy):"
-          cat ~/.oci/config
-      
-      - name: Test OCI Connection
-        env:
-          OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
+      - name: Verify OCI config
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
+          echo "Testing OCI CLI connection..."
+          $HOME/bin/oci iam region list --config-file ~/.oci/config || echo "Warning: Could not list regions"
           
-          echo "🔍 Testowanie połączenia z OCI..."
-          
-          if oci os ns get; then
-            echo "✅ Połączenie z OCI działa poprawnie!"
-          else
-            echo "❌ Nie można połączyć się z OCI"
-            exit 1
-          fi
-      
-      - name: Check ARM Instance Availability
-        env:
-          OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
-          COMPARTMENT_ID: ${{ secrets.COMPARTMENT_ID }}
-          SUBNET_ID: ${{ secrets.SUBNET_ID }}
-          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          
-          echo "🔍 Sprawdzanie dostępności ARM instances..."
-          
-          # Lista dostępnych ARM shapes
-          echo ""
-          echo "📊 Dostępne ARM shapes:"
-          oci compute shape list \
-            --compartment-id "$COMPARTMENT_ID" \
-            --all \
-            --query 'data[?contains(shape, `A1`) == `true`].{Shape:shape, OCPUs:"ocpus", Memory:"memory-in-g-bs"}' \
-            --output table
-          
-          # Lista istniejących instancji
-          echo ""
-          echo "📋 Istniejące instancje:"
-          oci compute instance list \
-            --compartment-id "$COMPARTMENT_ID" \
-            --all \
-            --output table \
-            --query 'data[*].{Name:"display-name", Shape:shape, State:"lifecycle-state", Created:"time-created"}' \
-            || echo "⚠️ Brak instancji"
-          
-          # Lista instancji ARM
-          echo ""
-          echo "💪 Istniejące instancje ARM:"
-          oci compute instance list \
-            --compartment-id "$COMPARTMENT_ID" \
-            --all \
-            --query 'data[?contains(shape, `A1`) == `true`].{Name:"display-name", Shape:shape, State:"lifecycle-state"}' \
-            --output table \
-            || echo "⚠️ Brak instancji ARM"
-          
-          echo ""
-          echo "✅ Sprawdzanie zakończone"
-      
-      - name: Try Create ARM Instance (Optional)
-        id: create
-        if: false  # Zmień na true jeśli chcesz próbować tworzyć instancję
-        env:
-          OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
-          COMPARTMENT_ID: ${{ secrets.COMPARTMENT_ID }}
-          SUBNET_ID: ${{ secrets.SUBNET_ID }}
-          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+      - name: Create Instance
+        id: create_instance
         continue-on-error: true
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
+          echo "🔍 Attempting to create A1.Flex instance..."
+          echo "Region: ${{ secrets.OCI_CLI_REGION }}"
+          echo "AD: QYsH:eu-amsterdam-1-AD-1"
           
-          echo "🚀 Próba utworzenia instancji ARM..."
+          # Stwórz plik z SSH key (bezpieczniejsze niż inline)
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" > /tmp/ssh_key.pub
           
-          # Pobierz dostępne availability domains
-          AD=$(oci iam availability-domain list \
-            --compartment-id "$COMPARTMENT_ID" \
-            --query 'data[0].name' \
-            --raw-output)
-          
-          echo "Availability Domain: $AD"
-          
-          # Pobierz najnowszy obraz Ubuntu ARM
-          IMAGE_ID=$(oci compute image list \
-            --compartment-id "$COMPARTMENT_ID" \
-            --operating-system "Canonical Ubuntu" \
-            --shape "VM.Standard.A1.Flex" \
-            --sort-by TIMECREATED \
-            --sort-order DESC \
-            --limit 1 \
-            --query 'data[0].id' \
-            --raw-output)
-          
-          echo "Image ID: $IMAGE_ID"
-          
-          # Próba utworzenia instancji
-          oci compute instance launch \
-            --availability-domain "$AD" \
-            --compartment-id "$COMPARTMENT_ID" \
+          $HOME/bin/oci compute instance launch \
+            --availability-domain "QYsH:eu-amsterdam-1-AD-1" \
+            --compartment-id "${{ secrets.COMPARTMENT_ID }}" \
             --shape "VM.Standard.A1.Flex" \
             --shape-config '{"ocpus":4,"memoryInGBs":24}' \
-            --image-id "$IMAGE_ID" \
-            --subnet-id "$SUBNET_ID" \
-            --display-name "arm-instance-$(date +%Y%m%d-%H%M%S)" \
+            --display-name "auto-a1-amsterdam" \
+            --image-id "ocid1.image.oc1.eu-amsterdam-1.aaaaaaaaioyodv57qb3wzjo2a26s2u225dkgoaav6itnhpieschantk34gkq" \
+            --subnet-id "${{ secrets.SUBNET_ID }}" \
             --assign-public-ip true \
-            --ssh-authorized-keys-file <(echo "$SSH_PUBLIC_KEY") \
+            --ssh-authorized-keys-file /tmp/ssh_key.pub \
             --wait-for-state RUNNING \
-            && echo "✅ Instancja utworzona!" \
-            || echo "⚠️ Brak dostępnej capacity"
+            --max-wait-seconds 300 \
+            2>&1 | tee output.log
+          
+          EXIT_CODE=$?
+          
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Exit code: $EXIT_CODE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Sprawdź capacity
+          if grep -Eiq "out of (host )?capacity|InsufficientCapacity" output.log; then
+            echo "⏳ No capacity available - will retry in 15 min"
+            echo "instance_created=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Sprawdź inne błędy
+          if grep -iq "ServiceError" output.log; then
+            echo "❌ ServiceError detected:"
+            grep -A 10 "ServiceError" output.log || true
+            echo "instance_created=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if grep -iq "InvalidParameter" output.log; then
+            echo "❌ InvalidParameter - check your configuration:"
+            grep -B 2 -A 5 "InvalidParameter" output.log || true
+            echo "instance_created=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if grep -iq "NotAuthorizedOrNotFound" output.log; then
+            echo "❌ NotAuthorized - check your OCIDs (compartment, subnet, image):"
+            grep -B 2 -A 5 "NotAuthorized" output.log || true
+            echo "instance_created=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Sprawdź sukces
+          if [ $EXIT_CODE -eq 0 ] && grep -q '"lifecycle-state": "RUNNING"' output.log; then
+            echo "✅ SUCCESS! Instance created and running!"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            grep -E '"display-name"|"lifecycle-state"|"public-ip"|"id"' output.log | head -20 || true
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "instance_created=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Wszystko inne
+          echo "⚠️ Unexpected result - full output:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          cat output.log
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "instance_created=false" >> $GITHUB_OUTPUT
+          exit 0
       
-      - name: Cleanup
-        if: always()
-        run: |
-          rm -rf ~/.oci
-          echo "✅ Cleanup zakończony"
+      - name: Send email notification on success
+        if: steps.create_instance.outputs.instance_created == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "✅ Oracle A1.Flex Instance Created!"
+          to: ${{ secrets.EMAIL_USERNAME }}
+          from: ${{ secrets.EMAIL_USERNAME }}
+          body: |
+            🎉 SUCCESS! Oracle A1.Flex instance created in Amsterdam!
+            
+            Go to: https://cloud.oracle.com
+            Navigate to: Compute → Instances
+            Find: auto-a1-amsterdam
+            
+            DISABLE GitHub workflow immediately!
