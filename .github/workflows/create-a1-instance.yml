@@ -1,12 +1,12 @@
-name: Create A1 Amsterdam
+name: OCI ARM Capacity Check
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/15 * * * *'  # Co 15 minut
   workflow_dispatch:
 
 jobs:
-  oci-task:
+  check-capacity:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     
@@ -20,79 +20,192 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/.local
-          key: ${{ runner.os }}-oci-cli
+          key: ${{ runner.os }}-oci-cli-v1
       
       - name: Install OCI CLI
         run: |
           pip install --user oci-cli
           echo "$HOME/.local/bin" >> $GITHUB_PATH
       
-      - name: Verify Installation
+      - name: Verify OCI CLI Installation
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           oci --version
       
-      - name: Configure OCI
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          mkdir -p ~/.oci
-          echo "${{ secrets.OCI_CLI_CONFIG }}" > ~/.oci/config
-          echo "${{ secrets.OCI_CLI_KEY }}" > ~/.oci/key.pem
-          chmod 600 ~/.oci/key.pem
-      
-      - name: Test Connection
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          oci os ns get
-      
-      - name: Run OCI Commands
+      - name: Configure OCI CLI
         env:
-          COMPARTMENT_ID: ${{ secrets.COMPARTMENT_ID }}
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           
-          echo "🚀 Uruchamianie komend OCI..."
+          # Sprawdź czy wszystkie secrets są ustawione
+          if [ -z "$OCI_CLI_USER" ]; then
+            echo "❌ Secret OCI_CLI_USER nie jest ustawiony!"
+            exit 1
+          fi
           
-          # ===================================
-          # ARM Instance Capacity Check
-          # ===================================
+          if [ -z "$OCI_CLI_TENANCY" ]; then
+            echo "❌ Secret OCI_CLI_TENANCY nie jest ustawiony!"
+            exit 1
+          fi
           
-          # Sprawdź dostępność ARM shapes
-          echo "📊 Sprawdzanie dostępności ARM instances..."
+          if [ -z "$OCI_CLI_FINGERPRINT" ]; then
+            echo "❌ Secret OCI_CLI_FINGERPRINT nie jest ustawiony!"
+            exit 1
+          fi
           
+          if [ -z "$OCI_CLI_REGION" ]; then
+            echo "❌ Secret OCI_CLI_REGION nie jest ustawiony!"
+            exit 1
+          fi
+          
+          if [ -z "$OCI_CLI_KEY_CONTENT" ]; then
+            echo "❌ Secret OCI_CLI_KEY_CONTENT nie jest ustawiony!"
+            exit 1
+          fi
+          
+          echo "✅ Wszystkie wymagane secrets są ustawione"
+          
+          # Utwórz katalog konfiguracyjny
+          mkdir -p ~/.oci
+          chmod 700 ~/.oci
+          
+          # Utwórz plik konfiguracyjny
+          cat > ~/.oci/config << EOF
+          [DEFAULT]
+          user=$OCI_CLI_USER
+          fingerprint=$OCI_CLI_FINGERPRINT
+          tenancy=$OCI_CLI_TENANCY
+          region=$OCI_CLI_REGION
+          key_file=~/.oci/key.pem
+          EOF
+          
+          chmod 600 ~/.oci/config
+          
+          # Zapisz klucz prywatny
+          echo "$OCI_CLI_KEY_CONTENT" > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
+          
+          echo "✅ OCI CLI skonfigurowane"
+          echo ""
+          echo "📋 Konfiguracja (bez kluczy):"
+          cat ~/.oci/config
+      
+      - name: Test OCI Connection
+        env:
+          OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          
+          echo "🔍 Testowanie połączenia z OCI..."
+          
+          if oci os ns get; then
+            echo "✅ Połączenie z OCI działa poprawnie!"
+          else
+            echo "❌ Nie można połączyć się z OCI"
+            exit 1
+          fi
+      
+      - name: Check ARM Instance Availability
+        env:
+          OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
+          COMPARTMENT_ID: ${{ secrets.COMPARTMENT_ID }}
+          SUBNET_ID: ${{ secrets.SUBNET_ID }}
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          
+          echo "🔍 Sprawdzanie dostępności ARM instances..."
+          
+          # Lista dostępnych ARM shapes
+          echo ""
+          echo "📊 Dostępne ARM shapes:"
           oci compute shape list \
             --compartment-id "$COMPARTMENT_ID" \
             --all \
-            --query 'data[?contains("processor-description", `Arm`) == `true`]' \
+            --query 'data[?contains(shape, `A1`) == `true`].{Shape:shape, OCPUs:"ocpus", Memory:"memory-in-g-bs"}' \
             --output table
           
-          # Lista istniejących instancji ARM
+          # Lista istniejących instancji
           echo ""
-          echo "📋 Istniejące instancje ARM:"
-          
+          echo "📋 Istniejące instancje:"
           oci compute instance list \
             --compartment-id "$COMPARTMENT_ID" \
             --all \
-            --query 'data[?contains(shape, `Ampere`) == `true`].{Name:"display-name", Shape:shape, State:"lifecycle-state"}' \
-            --output table
+            --output table \
+            --query 'data[*].{Name:"display-name", Shape:shape, State:"lifecycle-state", Created:"time-created"}' \
+            || echo "⚠️ Brak instancji"
           
-          # Próba utworzenia instancji (jeśli to Twój cel)
-          # echo ""
-          # echo "🔧 Próba utworzenia instancji ARM..."
-          # 
-          # oci compute instance launch \
-          #   --availability-domain "xxxx:EU-FRANKFURT-1-AD-1" \
-          #   --compartment-id "$COMPARTMENT_ID" \
-          #   --shape "VM.Standard.A1.Flex" \
-          #   --shape-config '{"ocpus":4,"memoryInGBs":24}' \
-          #   --image-id "ocid1.image.oc1.eu-frankfurt-1.xxx" \
-          #   --subnet-id "${{ secrets.SUBNET_ID }}" \
-          #   --display-name "arm-instance-$(date +%Y%m%d-%H%M%S)" \
-          #   --wait-for-state RUNNING \
-          #   || echo "⚠️ Brak dostępnej capacity dla ARM"
+          # Lista instancji ARM
+          echo ""
+          echo "💪 Istniejące instancje ARM:"
+          oci compute instance list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --all \
+            --query 'data[?contains(shape, `A1`) == `true`].{Name:"display-name", Shape:shape, State:"lifecycle-state"}' \
+            --output table \
+            || echo "⚠️ Brak instancji ARM"
           
-          echo "✅ Workflow zakończony"
+          echo ""
+          echo "✅ Sprawdzanie zakończone"
+      
+      - name: Try Create ARM Instance (Optional)
+        id: create
+        if: false  # Zmień na true jeśli chcesz próbować tworzyć instancję
+        env:
+          OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
+          COMPARTMENT_ID: ${{ secrets.COMPARTMENT_ID }}
+          SUBNET_ID: ${{ secrets.SUBNET_ID }}
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+        continue-on-error: true
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          
+          echo "🚀 Próba utworzenia instancji ARM..."
+          
+          # Pobierz dostępne availability domains
+          AD=$(oci iam availability-domain list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --query 'data[0].name' \
+            --raw-output)
+          
+          echo "Availability Domain: $AD"
+          
+          # Pobierz najnowszy obraz Ubuntu ARM
+          IMAGE_ID=$(oci compute image list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --operating-system "Canonical Ubuntu" \
+            --shape "VM.Standard.A1.Flex" \
+            --sort-by TIMECREATED \
+            --sort-order DESC \
+            --limit 1 \
+            --query 'data[0].id' \
+            --raw-output)
+          
+          echo "Image ID: $IMAGE_ID"
+          
+          # Próba utworzenia instancji
+          oci compute instance launch \
+            --availability-domain "$AD" \
+            --compartment-id "$COMPARTMENT_ID" \
+            --shape "VM.Standard.A1.Flex" \
+            --shape-config '{"ocpus":4,"memoryInGBs":24}' \
+            --image-id "$IMAGE_ID" \
+            --subnet-id "$SUBNET_ID" \
+            --display-name "arm-instance-$(date +%Y%m%d-%H%M%S)" \
+            --assign-public-ip true \
+            --ssh-authorized-keys-file <(echo "$SSH_PUBLIC_KEY") \
+            --wait-for-state RUNNING \
+            && echo "✅ Instancja utworzona!" \
+            || echo "⚠️ Brak dostępnej capacity"
       
       - name: Cleanup
         if: always()
-        run: rm -rf ~/.oci
+        run: |
+          rm -rf ~/.oci
+          echo "✅ Cleanup zakończony"
