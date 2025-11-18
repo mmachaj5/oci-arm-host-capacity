@@ -6,7 +6,7 @@ on:
   workflow_dispatch:        # Możliwość ręcznego uruchomienia
   push:
     branches:
-      - main                # Uruchom przy push do main (opcjonalnie)
+      - master                # Uruchom przy push do main (opcjonalnie)
 
 jobs:
   oci-task:
