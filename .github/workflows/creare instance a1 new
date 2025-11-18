@@ -1,0 +1,89 @@
+name: OCI Automation
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # Co 15 minut
+  workflow_dispatch:
+
+jobs:
+  oci-task:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install OCI CLI
+        run: |
+          echo "📦 Installing OCI CLI via pip..."
+          python3 -m pip install --user oci-cli
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      
+      - name: Verify Installation
+        run: |
+          sleep 1
+          export PATH="$HOME/.local/bin:$PATH"
+          
+          if command -v oci &> /dev/null; then
+            echo "✅ OCI CLI installed successfully"
+            oci --version
+          else
+            echo "❌ OCI CLI installation failed"
+            exit 1
+          fi
+      
+      - name: Configure OCI
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          
+          mkdir -p ~/.oci
+          
+          # Tworzenie pliku konfiguracyjnego
+          cat > ~/.oci/config << EOF
+          ${{ secrets.OCI_CLI_CONFIG }}
+          EOF
+          
+          # Tworzenie klucza prywatnego
+          cat > ~/.oci/key.pem << EOF
+          ${{ secrets.OCI_CLI_KEY }}
+          EOF
+          
+          # Ustawienie odpowiednich uprawnień
+          chmod 600 ~/.oci/key.pem
+          chmod 600 ~/.oci/config
+          
+          echo "✅ OCI CLI configured"
+      
+      - name: Test OCI Connection
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          
+          echo "🔍 Testing OCI connection..."
+          if oci os ns get; then
+            echo "✅ Successfully connected to OCI"
+          else
+            echo "❌ Failed to connect to OCI"
+            exit 1
+          fi
+      
+      - name: Run Your OCI Commands
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          
+          # TUTAJ DODAJ SWOJE KOMENDY OCI
+          # Przykład:
+          # oci compute instance list --compartment-id ${{ secrets.COMPARTMENT_ID }}
+          
+          echo "✅ OCI commands completed"
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf ~/.oci
+          echo "✅ Cleanup completed"
