@@ -2,11 +2,8 @@ name: Create A1 Amsterdam
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Co 15 minut
-  workflow_dispatch:        # Możliwość ręcznego uruchomienia
-  push:
-    branches:
-      - master                # Uruchom przy push do main (opcjonalnie)
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
 
 jobs:
   oci-task:
@@ -14,94 +11,40 @@ jobs:
     timeout-minutes: 10
     
     steps:
-      # 1. Checkout repozytorium (jeśli potrzebujesz plików z repo)
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-      
-      # 2. Konfiguracja Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
       
-      # 3. Cache dla OCI CLI (przyspiesza kolejne uruchomienia)
       - name: Cache OCI CLI
-        id: cache-oci
         uses: actions/cache@v3
         with:
           path: ~/.local
-          key: ${{ runner.os }}-oci-cli-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-oci-cli-
+          key: ${{ runner.os }}-oci-cli
       
-      # 4. Instalacja OCI CLI
       - name: Install OCI CLI
         run: |
-          echo "📦 Instalacja OCI CLI..."
           pip install --user oci-cli
           echo "$HOME/.local/bin" >> $GITHUB_PATH
       
-      # 5. Weryfikacja instalacji
-      - name: Verify OCI CLI Installation
+      - name: Verify Installation
         run: |
-          sleep 1
           export PATH="$HOME/.local/bin:$PATH"
-          
-          if command -v oci &> /dev/null; then
-            echo "✅ OCI CLI zainstalowane pomyślnie"
-            echo "Wersja: $(oci --version)"
-          else
-            echo "❌ OCI CLI nie znalezione"
-            exit 1
-          fi
+          oci --version
       
-      # 6. Konfiguracja OCI CLI
-      - name: Configure OCI CLI
-        env:
-          OCI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
-          OCI_KEY: ${{ secrets.OCI_CLI_KEY }}
+      - name: Configure OCI
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          
-          echo "🔧 Konfiguracja OCI CLI..."
-          
-          # Sprawdź czy secrets są ustawione
-          if [ -z "$OCI_CONFIG" ] || [ -z "$OCI_KEY" ]; then
-            echo "❌ Brak wymaganych secrets (OCI_CLI_CONFIG lub OCI_CLI_KEY)"
-            exit 1
-          fi
-          
-          # Utwórz katalog konfiguracyjny
           mkdir -p ~/.oci
-          
-          # Zapisz plik konfiguracyjny
-          echo "$OCI_CONFIG" > ~/.oci/config
-          
-          # Zapisz klucz prywatny
-          echo "$OCI_KEY" > ~/.oci/key.pem
-          
-          # Ustaw odpowiednie uprawnienia
+          echo "${{ secrets.OCI_CLI_CONFIG }}" > ~/.oci/config
+          echo "${{ secrets.OCI_CLI_KEY }}" > ~/.oci/key.pem
           chmod 600 ~/.oci/key.pem
-          chmod 600 ~/.oci/config
-          
-          echo "✅ OCI CLI skonfigurowane"
       
-      # 7. Test połączenia z OCI
-      - name: Test OCI Connection
+      - name: Test Connection
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          
-          echo "🔍 Testowanie połączenia z OCI..."
-          
-          if oci os ns get; then
-            echo "✅ Połączenie z OCI działa poprawnie"
-          else
-            echo "❌ Nie można połączyć się z OCI"
-            exit 1
-          fi
+          oci os ns get
       
-      # 8. Główne zadania OCI
       - name: Run OCI Commands
         env:
           COMPARTMENT_ID: ${{ secrets.COMPARTMENT_ID }}
@@ -111,81 +54,45 @@ jobs:
           echo "🚀 Uruchamianie komend OCI..."
           
           # ===================================
-          # TUTAJ DODAJ SWOJE KOMENDY OCI
+          # ARM Instance Capacity Check
           # ===================================
           
-          # Przykład 1: Lista instancji compute
-          echo "📋 Lista instancji compute:"
-          oci compute instance list \
-            --compartment-id "$COMPARTMENT_ID" \
-            --output table \
-            --query 'data[*].{Name:"display-name", State:"lifecycle-state", Shape:shape}' \
-            || echo "⚠️  Brak instancji lub błąd"
+          # Sprawdź dostępność ARM shapes
+          echo "📊 Sprawdzanie dostępności ARM instances..."
           
-          # Przykład 2: Lista bucket'ów
-          echo ""
-          echo "📦 Lista Object Storage buckets:"
-          oci os bucket list \
+          oci compute shape list \
             --compartment-id "$COMPARTMENT_ID" \
-            --output table \
-            || echo "⚠️  Brak buckets lub błąd"
-          
-          # Przykład 3: Informacje o namespace
-          echo ""
-          echo "📌 Object Storage namespace:"
-          oci os ns get
-          
-          # Przykład 4: Sprawdź limity i usage
-          echo ""
-          echo "📊 Service limits:"
-          oci limits value list \
-            --compartment-id "$COMPARTMENT_ID" \
-            --service-name compute \
             --all \
-            --output table \
-            || echo "⚠️  Nie można pobrać limitów"
+            --query 'data[?contains("processor-description", `Arm`) == `true`]' \
+            --output table
           
-          # Przykład 5: Eksport do JSON (jeśli potrzebujesz przetwarzać dane)
+          # Lista istniejących instancji ARM
           echo ""
-          echo "💾 Zapisywanie danych do pliku..."
+          echo "📋 Istniejące instancje ARM:"
+          
           oci compute instance list \
             --compartment-id "$COMPARTMENT_ID" \
-            --output json > /tmp/instances.json
+            --all \
+            --query 'data[?contains(shape, `Ampere`) == `true`].{Name:"display-name", Shape:shape, State:"lifecycle-state"}' \
+            --output table
           
-          echo "Liczba instancji: $(cat /tmp/instances.json | jq '.data | length')"
+          # Próba utworzenia instancji (jeśli to Twój cel)
+          # echo ""
+          # echo "🔧 Próba utworzenia instancji ARM..."
+          # 
+          # oci compute instance launch \
+          #   --availability-domain "xxxx:EU-FRANKFURT-1-AD-1" \
+          #   --compartment-id "$COMPARTMENT_ID" \
+          #   --shape "VM.Standard.A1.Flex" \
+          #   --shape-config '{"ocpus":4,"memoryInGBs":24}' \
+          #   --image-id "ocid1.image.oc1.eu-frankfurt-1.xxx" \
+          #   --subnet-id "${{ secrets.SUBNET_ID }}" \
+          #   --display-name "arm-instance-$(date +%Y%m%d-%H%M%S)" \
+          #   --wait-for-state RUNNING \
+          #   || echo "⚠️ Brak dostępnej capacity dla ARM"
           
-          echo ""
-          echo "✅ Wszystkie komendy OCI wykonane"
+          echo "✅ Workflow zakończony"
       
-      # 9. Upload artefaktów (opcjonalnie - jeśli chcesz zachować wyniki)
-      - name: Upload Results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: oci-results-${{ github.run_number }}
-          path: |
-            /tmp/*.json
-            /tmp/*.log
-          retention-days: 7
-        continue-on-error: true
-      
-      # 10. Czyszczenie (bezpieczeństwo)
       - name: Cleanup
         if: always()
-        run: |
-          echo "🧹 Czyszczenie..."
-          rm -rf ~/.oci
-          rm -f /tmp/*.json
-          rm -f /tmp/*.log
-          echo "✅ Cleanup zakończone"
-      
-      # 11. Podsumowanie
-      - name: Summary
-        if: always()
-        run: |
-          echo "📝 === PODSUMOWANIE ===" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Czas wykonania**: $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Runner**: ${{ runner.os }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Workflow**: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Run number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+        run: rm -rf ~/.oci
